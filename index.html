@@ -267,19 +267,36 @@
         import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, doc, getDoc, setDoc, collection, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // Cloud Storage State
+        // Cloud & Leaderboard State
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'cyber-surge-2099';
         let db = null;
         let auth = null;
-        let currentUserId = null;
-        let leaderboardData = [];
+        let currentUserId = 'PILOT_' + Math.random().toString(36).substring(2, 8).toUpperCase();
+        
+        // Предустановленный рейтинг топ-пилотов Нео-Токио (для GitHub Pages и автономного режима)
+        const DEFAULT_RIVALS = [
+            { userId: 'PILOT_K3NSH1N', name: 'KENSHIN_X', score: 38400, orbs: 42 },
+            { userId: 'PILOT_GH0ST99', name: 'CYBER_GHOST', score: 27950, orbs: 31 },
+            { userId: 'PILOT_BL4D3', name: 'N30_BLADE', score: 19800, orbs: 24 },
+            { userId: 'PILOT_SYNTH', name: 'V4P0R_WAVE', score: 14200, orbs: 18 },
+            { userId: 'PILOT_GL1TCH', name: 'GLITCH_RUN', score: 9600, orbs: 12 }
+        ];
+        let leaderboardData = [...DEFAULT_RIVALS];
 
-        // Connect to Cloud Storage
         async function initCloud() {
-            if (typeof __firebase_config === 'undefined') {
-                console.warn('Firebase config missing');
+            const userDisplayEl = document.getElementById('user-id-display');
+            
+            // Если игра запущена на GitHub Pages (где нет серверных переменных окружения)
+            const hasEnvConfig = typeof __firebase_config !== 'undefined';
+            
+            if (!hasEnvConfig) {
+                if (userDisplayEl) {
+                    userDisplayEl.textContent = `${currentUserId} (АВТОНОМНЫЙ РЕЖИМ // GITHUB)`;
+                }
+                renderLeaderboardUI(leaderboardData);
                 return;
             }
+
             try {
                 const firebaseConfig = JSON.parse(__firebase_config);
                 const app = initializeApp(firebaseConfig);
@@ -295,7 +312,6 @@
                 if (!auth.currentUser) return;
                 currentUserId = auth.currentUser.uid;
 
-                const userDisplayEl = document.getElementById('user-id-display');
                 if (userDisplayEl) {
                     userDisplayEl.textContent = currentUserId;
                 }
@@ -303,6 +319,10 @@
                 initLeaderboardListener();
             } catch (err) {
                 console.error("Cloud init error:", err);
+                if (userDisplayEl) {
+                    userDisplayEl.textContent = `${currentUserId} (АВТОНОМНЫЙ РЕЖИМ)`;
+                }
+                renderLeaderboardUI(leaderboardData);
             }
         }
 
@@ -316,7 +336,7 @@
                     scoresList.push(docSnap.data());
                 });
                 scoresList.sort((a, b) => (b.score || 0) - (a.score || 0));
-                leaderboardData = scoresList;
+                leaderboardData = scoresList.length > 0 ? scoresList : [...DEFAULT_RIVALS];
                 renderLeaderboardUI(leaderboardData);
             }, (error) => {
                 console.error("Leaderboard snapshot error:", error);
@@ -337,7 +357,7 @@
             const container = document.getElementById('leaderboard-list');
             if (!container) return;
 
-            if (list.length === 0) {
+            if (!list || list.length === 0) {
                 container.innerHTML = `
                     <div class="py-8 text-center text-xs font-orbitron text-cyan-400/50">
                         СЕТЬ ЧИСТА. БУДЬ ПЕРВЫМ В ЗАЛЕ СЛАВЫ!
@@ -347,7 +367,7 @@
             }
 
             container.innerHTML = list.slice(0, 20).map((item, idx) => {
-                const isMe = auth && auth.currentUser && item.userId === auth.currentUser.uid;
+                const isMe = (auth && auth.currentUser && item.userId === auth.currentUser.uid) || (item.userId === currentUserId);
                 let rankBadge = `#${idx + 1}`;
                 let rankColor = 'text-cyan-300';
                 if (idx === 0) { rankBadge = '🥇 #1'; rankColor = 'text-yellow-300 font-black'; }
@@ -361,7 +381,7 @@
                             <div class="flex flex-col min-w-0">
                                 <span class="text-xs font-orbitron font-bold text-white truncate flex items-center gap-1.5">
                                     ${escapeHtml(item.name || 'CYBER_PILOT')}
-                                    ${isMe ? '<span class="text-[9px] px-1.5 py-0.2 rounded bg-cyan-400 text-black font-black">ВЫ</span>' : ''}
+                                    ${isMe ? '<span class="text-[9px] px-1.5 py-0.5 rounded bg-cyan-400 text-black font-black">ВЫ</span>' : ''}
                                 </span>
                                 <span class="text-[9px] font-mono text-cyan-300/40 truncate">${item.userId || ''}</span>
                             </div>
@@ -378,16 +398,37 @@
         async function saveScoreToCloud(score, orbs) {
             const roundedScore = Math.floor(score);
             const saveStatusEl = document.getElementById('cloud-save-status');
+            const nameInput = document.getElementById('pilot-name-input');
+            const callsign = (nameInput && nameInput.value.trim()) ? nameInput.value.trim().toUpperCase() : 'CYBER_PILOT';
 
+            if (roundedScore <= 0) return;
+
+            // Если запущено на GitHub Pages (без прямого облачного сервера)
             if (!auth || !auth.currentUser || !db) {
+                const existingIdx = leaderboardData.findIndex(item => item.userId === currentUserId);
+                if (existingIdx >= 0) {
+                    if (roundedScore > (leaderboardData[existingIdx].score || 0)) {
+                        leaderboardData[existingIdx].score = roundedScore;
+                        leaderboardData[existingIdx].orbs = orbs;
+                        leaderboardData[existingIdx].name = callsign;
+                    }
+                } else {
+                    leaderboardData.push({
+                        userId: currentUserId,
+                        name: callsign,
+                        score: roundedScore,
+                        orbs: orbs
+                    });
+                }
+                leaderboardData.sort((a, b) => (b.score || 0) - (a.score || 0));
+                renderLeaderboardUI(leaderboardData);
+
                 if (saveStatusEl) {
-                    saveStatusEl.textContent = '✖ ОБЛАКО НЕ ПОДКЛЮЧЕНО';
-                    saveStatusEl.className = 'text-[11px] font-orbitron text-pink-400 my-1';
+                    saveStatusEl.textContent = '✔ РЕКОРД ЗАПИСАН В ТАБЛИЦУ!';
+                    saveStatusEl.className = 'text-[11px] font-orbitron text-emerald-400 my-1';
                 }
                 return;
             }
-
-            if (roundedScore <= 0) return;
 
             if (saveStatusEl) {
                 saveStatusEl.textContent = '⚡ СИНХРОНИЗАЦИЯ С ОБЛАКОМ...';
@@ -405,9 +446,6 @@
                         shouldUpdate = false;
                     }
                 }
-
-                const nameInput = document.getElementById('pilot-name-input');
-                const callsign = (nameInput && nameInput.value.trim()) ? nameInput.value.trim().toUpperCase() : 'CYBER_PILOT';
 
                 if (shouldUpdate) {
                     await setDoc(userDocRef, {
